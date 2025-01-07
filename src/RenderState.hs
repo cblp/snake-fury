@@ -1,7 +1,7 @@
 {-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {- |
@@ -22,9 +22,7 @@ Which would look like this:
 -}
 module RenderState where
 
--- This are all imports you need. Feel free to import more things.
-
-import Control.Lens ((%~), (&), (+~), (.~), _2)
+import Control.Lens ((&), (+~), _2)
 import Control.Monad.IO.Class (MonadIO, liftIO)
 import Control.Monad.Reader (ReaderT, ask)
 import Data.Array (Array, assocs, listArray, (//))
@@ -32,9 +30,10 @@ import Data.ByteString.Builder (Builder)
 import Data.ByteString.Builder qualified as B
 import Data.ByteString.Lazy qualified as BL
 import Data.Foldable (traverse_)
+import Data.Functor.Identity (Identity (Identity))
 import Data.Generics.Labels ()
 import GHC.Generics (Generic)
-import UnliftIO (IORef, modifyIORef, readIORef)
+import UnliftIO (IORef, modifyIORef, readIORef, writeIORef)
 
 -- A point is just a tuple of integers.
 type Point = (Int, Int)
@@ -61,9 +60,18 @@ type DeltaBoard = [(Point, CellType)]
 data RenderMessage = RenderBoard DeltaBoard | IncrementScore | GameOver deriving (Show)
 
 -- | The RenderState contains the board and if the game is over or not.
-data RenderState = RenderState {board :: Board, gameOver :: Bool, score :: Int} deriving (Generic, Show)
+data RenderStateF f = RenderState
+  { board :: f Board
+  , gameOver :: f Bool
+  , score :: f Int
+  }
+  deriving (Generic)
 
-type RenderStep = ReaderT (BoardInfo, IORef RenderState)
+type RenderState = RenderStateF Identity
+
+type RenderStateRef = RenderStateF IORef
+
+type RenderStep = ReaderT (BoardInfo, RenderStateRef)
 
 -- | Given The board info, this function should return a board with all Empty cells
 emptyGrid :: BoardInfo -> Board
@@ -85,7 +93,11 @@ buildInitialBoard ::
   Point ->
   RenderState
 buildInitialBoard brd snake apple =
-  RenderState{board = brd', gameOver = False, score = 0}
+  RenderState
+    { board = Identity brd'
+    , gameOver = Identity False
+    , score = Identity 0
+    }
  where
   brd' =
     emptyGrid brd
@@ -100,13 +112,11 @@ RenderState {board = array ((1,1),(2,2)) [((1,1),SnakeHead),((1,2),Empty),((2,1)
 -- | Given tye current render state, and a message -> update the render state
 updateRenderState :: (MonadIO m) => RenderMessage -> RenderStep m ()
 updateRenderState msg = do
-  (_, renderState) <- ask
-  modifyIORef
-    renderState
-    case msg of
-      GameOver -> #gameOver .~ True
-      IncrementScore -> #score +~ 10
-      RenderBoard delta -> #board %~ (// delta)
+  (_, RenderState{gameOver, score, board}) <- ask
+  case msg of
+    GameOver -> writeIORef gameOver True
+    IncrementScore -> modifyIORef score (+ 10)
+    RenderBoard delta -> modifyIORef board (// delta)
 
 updateMessages :: (MonadIO m) => [RenderMessage] -> RenderStep m ()
 updateMessages = traverse_ updateRenderState
@@ -156,12 +166,14 @@ ppScore s =
 -}
 renderStep :: (MonadIO m) => RenderStep m Builder
 renderStep = do
-  (BoardInfo{width}, gameState) <- ask
-  RenderState{gameOver, score, board} <- readIORef gameState
-  pure
-    if gameOver
-      then "Game Over!"
-      else
+  (BoardInfo{width}, renderState) <- ask
+  gameOver <- readIORef renderState.gameOver
+  if gameOver
+    then pure "Game Over!"
+    else do
+      board <- readIORef renderState.board
+      score <- readIORef renderState.score
+      pure $
         ppScore score
           <> foldMap
             (\((_, x), c) -> ppCell c <> if x == width then "\n" else "")

@@ -16,12 +16,14 @@ import GameState (Event (..), GameState, GameStateF (..), GameStateRef, move)
 import RenderState (
   BoardInfo,
   RenderMessage,
-  RenderState (RenderState),
+  RenderState,
+  RenderStateF (RenderState),
+  RenderStateRef,
   render,
   updateMessages,
  )
 import RenderState qualified
-import UnliftIO (IORef, newIORef, readIORef)
+import UnliftIO (newIORef, readIORef)
 
 data AppState = AppState {gameState :: GameState, renderState :: RenderState}
   deriving (Generic)
@@ -29,7 +31,7 @@ data AppState = AppState {gameState :: GameState, renderState :: RenderState}
 data Env = Env {boardInfo :: BoardInfo, eventQueue :: EventQueue}
   deriving (Generic)
 
-type App = ReaderT (Env, GameStateRef, IORef RenderState) IO
+type App = ReaderT (Env, GameStateRef, RenderStateRef) IO
 
 runApp :: Env -> AppState -> App a -> IO a
 runApp env initialState app = do
@@ -38,8 +40,12 @@ runApp env initialState app = do
     movement <- newIORef $ runIdentity initialState.gameState.movement
     snakeSeq <- newIORef $ runIdentity initialState.gameState.snakeSeq
     pure GameState{..}
-  renderStateRef <- newIORef initialState.renderState
-  runReaderT app (env, gameState, renderStateRef)
+  renderState <- do
+    board <- newIORef $ runIdentity initialState.renderState.board
+    gameOver <- newIORef $ runIdentity initialState.renderState.gameOver
+    score <- newIORef $ runIdentity initialState.renderState.score
+    pure RenderState{..}
+  runReaderT app (env, gameState, renderState)
 
 -- | Pull an Event from the queue
 pullEvent :: App Event
@@ -66,7 +72,7 @@ render =
 setSpeedOnScore :: App Int
 setSpeedOnScore = do
   (Env{eventQueue}, _, renderState) <- ask
-  RenderState{score} <- readIORef renderState
+  score <- readIORef renderState.score
   liftIO $ setSpeed score eventQueue
 
 -- This is one step of the logic: read from the queue and-then update the game state and-then update the render state and-then render
@@ -80,7 +86,7 @@ gameloop = do
   w <- setSpeedOnScore
   liftIO $ threadDelay w
   gameStep
-  RenderState{gameOver = isGameOver} <- readIORef renderState
+  isGameOver <- readIORef renderState.gameOver
   unless isGameOver gameloop
 
 run :: Env -> AppState -> IO ()
