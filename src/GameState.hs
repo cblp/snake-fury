@@ -4,7 +4,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE OverloadedLabels #-}
 
 {- |
 This module defines the logic of the game and the communication with the `Board.RenderState`
@@ -13,7 +12,6 @@ module GameState where
 
 -- These are all the import. Feel free to use more if needed.
 
-import Control.Lens ((.~))
 import Control.Monad (when)
 import Control.Monad.Reader (ReaderT, ask)
 import Data.Foldable (toList)
@@ -29,7 +27,7 @@ import RenderState (
   RenderMessage (..),
  )
 import System.Random (Random (randomR), StdGen)
-import UnliftIO (IORef, MonadIO, atomicModifyIORef, modifyIORef, readIORef)
+import UnliftIO (IORef, MonadIO, atomicModifyIORef, readIORef, writeIORef)
 
 -- | The are two kind of events, a `ClockEvent`, representing movement which is not force by the user input, and `UserEvent` which is the opposite.
 data Event = Tick | UserEvent Movement
@@ -49,15 +47,17 @@ data SnakeSeq = SnakeSeq {snakeHead :: Point, snakeBody :: Seq Point} deriving (
 {- | The GameState represents all important bits in the game. The Snake, The apple, the current direction of movement and
   a random seed to calculate the next random apple.
 -}
-data GameState = GameState
-  { snakeSeq :: SnakeSeq
-  , applePosition :: Point
-  , movement :: Movement
-  , randomGen :: StdGen
+data GameState' f = GameState
+  { snakeSeq :: f SnakeSeq
+  , applePosition :: f Point
+  , movement :: f Movement
+  , randomGen :: f StdGen
   }
-  deriving (Eq, Generic, Show)
+  deriving (Generic)
 
-type GameStep = ReaderT (BoardInfo, IORef GameState)
+type GameState = GameState' IORef
+
+type GameStep = ReaderT (BoardInfo, GameState)
 
 -- | This function should calculate the opposite movement.
 oppositeMovement :: Movement -> Movement
@@ -73,9 +73,8 @@ oppositeMovement = \case
 -}
 makeRandomPoint :: (MonadIO m) => GameStep m Point
 makeRandomPoint = do
-  (BoardInfo{height, width}, gameState) <- ask
-  atomicModifyIORef gameState $
-    swap . #randomGen (randomR ((1, 1), (height, width)))
+  (BoardInfo{height, width}, GameState{randomGen}) <- ask
+  atomicModifyIORef randomGen $ swap . randomR ((1, 1), (height, width))
 
 {-
 We can't test makeRandomPoint, because different implementation may lead to different valid result.
@@ -105,8 +104,8 @@ False
 {- | Calculates de new head of the snake. Considering it is moving in the current direction
   Take into acount the edges of the board
 -}
-nextHead :: BoardInfo -> GameState -> Point
-nextHead BoardInfo{height, width} GameState{snakeSeq = SnakeSeq{snakeHead = (y, x)}, movement} =
+nextHead :: BoardInfo -> SnakeSeq -> Movement -> Point
+nextHead BoardInfo{height, width} SnakeSeq{snakeHead = (y, x)} movement =
   case movement of
     South -> (if y == height then 1 else y + 1, x)
     North -> (if y == 1 then height else y - 1, x)
@@ -132,13 +131,14 @@ True
 -- | Calculates a new random apple, avoiding creating the apple in the same place, or in the snake body
 newApple :: (MonadIO m) => GameStep m Point
 newApple = do
-  (_, gameState) <- ask
+  (_, GameState{snakeSeq, applePosition}) <- ask
   pt <- makeRandomPoint
-  GameState{snakeSeq, applePosition} <- readIORef gameState
-  if inSnake pt snakeSeq || pt == applePosition
+  snake <- readIORef snakeSeq
+  currentApplePosition <- readIORef applePosition
+  if inSnake pt snake || pt == currentApplePosition
     then newApple
     else do
-      modifyIORef gameState $ #applePosition .~ pt
+      writeIORef applePosition pt
       pure pt
 
 {- We can't test this function because it depends on makeRandomPoint -}
@@ -161,14 +161,17 @@ We need to send the following delta: [((2,2), Apple), ((4,3), Snake), ((4,4), Sn
 -}
 step :: (MonadIO m) => GameStep m [RenderMessage]
 step = do
-  (brd@BoardInfo{height, width}, gameState) <- ask
-  st@GameState{snakeSeq = snake@SnakeSeq{snakeBody}, applePosition} <-
-    readIORef gameState
-  let head' = nextHead brd st
+  (brd, gs) <- ask
+  let BoardInfo{height, width} = brd
+  let GameState{snakeSeq, applePosition, movement} = gs
+  currentApplePosition <- readIORef applePosition
+  currentMovement <- readIORef movement
+  snake@SnakeSeq{snakeBody} <- readIORef snakeSeq
+  let head' = nextHead brd snake currentMovement
   if
     | length snakeBody == height * width - 2 || inSnake head' snake ->
         pure [GameOver]
-    | head' == applePosition -> do
+    | head' == currentApplePosition -> do
         msg <- extendSnake head'
         pure [IncrementScore, RenderBoard msg]
     | otherwise -> do
@@ -177,14 +180,13 @@ step = do
 
 move :: (MonadIO m) => Event -> GameStep m [RenderMessage]
 move event = do
-  (_, gameState) <- ask
-  GameState{movement = currentMovement} <- readIORef gameState
+  (_, GameState{movement}) <- ask
+  currentMovement <- readIORef movement
   case event of
     Tick -> pure ()
     UserEvent userMovement ->
       when (userMovement /= oppositeMovement currentMovement) $
-        modifyIORef gameState $
-          #movement .~ userMovement
+        writeIORef movement userMovement
   step
 
 seqInit :: Seq a -> Seq a
@@ -194,9 +196,9 @@ seqInit = \case
 
 extendSnake :: (MonadIO m) => Point -> GameStep m DeltaBoard
 extendSnake head' = do
-  (_, gameState) <- ask
-  GameState{snakeSeq = SnakeSeq{snakeHead, snakeBody}} <- readIORef gameState
-  modifyIORef gameState $ #snakeSeq .~ SnakeSeq head' (snakeHead <| snakeBody)
+  (_, GameState{snakeSeq}) <- ask
+  SnakeSeq{snakeHead, snakeBody} <- readIORef snakeSeq
+  writeIORef snakeSeq $ SnakeSeq head' $ snakeHead <| snakeBody
   applePosition' <- newApple
   pure
     [ (applePosition', Apple)
@@ -206,10 +208,9 @@ extendSnake head' = do
 
 displaceSnake :: (MonadIO m) => Point -> GameStep m DeltaBoard
 displaceSnake head' = do
-  (_, gameState) <- ask
-  GameState{snakeSeq = SnakeSeq{snakeHead, snakeBody}} <- readIORef gameState
-  modifyIORef gameState $
-    #snakeSeq .~ SnakeSeq head' (snakeHead <| seqInit snakeBody)
+  (_, GameState{snakeSeq}) <- ask
+  SnakeSeq{snakeHead, snakeBody} <- readIORef snakeSeq
+  writeIORef snakeSeq $ SnakeSeq head' $ snakeHead <| seqInit snakeBody
   pure
     [ (snakeHead, Snake)
     , (head', SnakeHead)

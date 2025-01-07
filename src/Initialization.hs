@@ -30,7 +30,14 @@ gameInitialization hight width initialspeed = do
   newUserEventQueue <- newBoundedChan 3
   newSpeed <- newMVar initialspeed
   let binf = RenderState.BoardInfo hight width
-      gameState = Snake.GameState (Snake.SnakeSeq snakeInit $ Seq.fromList [(fst snakeInit, snd snakeInit + 1)]) appleInit Snake.West sg
+      gameState =
+        Snake.GameState
+          ( Snake.SnakeSeq snakeInit $
+              Seq.fromList [(fst snakeInit, snd snakeInit + 1)]
+          )
+          appleInit
+          Snake.West
+          sg
       renderState = RenderState.buildInitialBoard binf snakeInit appleInit
       eventQueue = EventQueue newUserEventQueue newSpeed initialspeed
   return (binf, gameState, renderState, eventQueue)
