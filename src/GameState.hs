@@ -13,12 +13,13 @@ module GameState where
 
 -- These are all the import. Feel free to use more if needed.
 
-import Control.Lens (use, (.=))
+import Control.Lens ((.~))
 import Control.Monad (when)
-import Control.Monad.RWS.Strict (RWST, ask, get, state)
+import Control.Monad.Reader (ReaderT, ask)
 import Data.Foldable (toList)
 import Data.Sequence (Seq ((:|>)), (<|))
 import Data.Sequence qualified as Seq
+import Data.Tuple (swap)
 import GHC.Generics (Generic)
 import RenderState (
   BoardInfo (..),
@@ -28,6 +29,7 @@ import RenderState (
   RenderMessage (..),
  )
 import System.Random (Random (randomR), StdGen)
+import UnliftIO (IORef, MonadIO, atomicModifyIORef, modifyIORef, readIORef)
 
 -- | The are two kind of events, a `ClockEvent`, representing movement which is not force by the user input, and `UserEvent` which is the opposite.
 data Event = Tick | UserEvent Movement
@@ -55,7 +57,7 @@ data GameState = GameState
   }
   deriving (Eq, Generic, Show)
 
-type GameStep = RWST BoardInfo () GameState
+type GameStep = ReaderT (BoardInfo, IORef GameState)
 
 -- | This function should calculate the opposite movement.
 oppositeMovement :: Movement -> Movement
@@ -69,10 +71,11 @@ oppositeMovement = \case
   You should take a look to System.Random documentation.
   Also, in the import list you have all relevant functions.
 -}
-makeRandomPoint :: (Monad m) => GameStep m Point
+makeRandomPoint :: (MonadIO m) => GameStep m Point
 makeRandomPoint = do
-  BoardInfo{height, width} <- ask
-  state $ #randomGen $ randomR ((1, 1), (height, width))
+  (BoardInfo{height, width}, gameState) <- ask
+  atomicModifyIORef gameState $
+    swap . #randomGen (randomR ((1, 1), (height, width)))
 
 {-
 We can't test makeRandomPoint, because different implementation may lead to different valid result.
@@ -127,14 +130,15 @@ True
 -- >>> nextHead board_info game_state3 == (4,1)
 
 -- | Calculates a new random apple, avoiding creating the apple in the same place, or in the snake body
-newApple :: (Monad m) => GameStep m Point
+newApple :: (MonadIO m) => GameStep m Point
 newApple = do
+  (_, gameState) <- ask
   pt <- makeRandomPoint
-  GameState{snakeSeq, applePosition} <- get
+  GameState{snakeSeq, applePosition} <- readIORef gameState
   if inSnake pt snakeSeq || pt == applePosition
     then newApple
     else do
-      #applePosition .= pt
+      modifyIORef gameState $ #applePosition .~ pt
       pure pt
 
 {- We can't test this function because it depends on makeRandomPoint -}
@@ -155,10 +159,11 @@ Another example, if we move between this two steps
        - 0 $ X          - 0 0 $
 We need to send the following delta: [((2,2), Apple), ((4,3), Snake), ((4,4), SnakeHead)]
 -}
-step :: (Monad m) => GameStep m [RenderMessage]
+step :: (MonadIO m) => GameStep m [RenderMessage]
 step = do
-  st@GameState{snakeSeq = snake@SnakeSeq{snakeBody}, applePosition} <- get
-  brd@BoardInfo{height, width} <- ask
+  (brd@BoardInfo{height, width}, gameState) <- ask
+  st@GameState{snakeSeq = snake@SnakeSeq{snakeBody}, applePosition} <-
+    readIORef gameState
   let head' = nextHead brd st
   if
     | length snakeBody == height * width - 2 || inSnake head' snake ->
@@ -170,14 +175,16 @@ step = do
         msg <- displaceSnake head'
         pure [RenderBoard msg]
 
-move :: (Monad m) => Event -> GameStep m [RenderMessage]
+move :: (MonadIO m) => Event -> GameStep m [RenderMessage]
 move event = do
-  currentMovement <- use #movement
+  (_, gameState) <- ask
+  GameState{movement = currentMovement} <- readIORef gameState
   case event of
     Tick -> pure ()
     UserEvent userMovement ->
       when (userMovement /= oppositeMovement currentMovement) $
-        #movement .= userMovement
+        modifyIORef gameState $
+          #movement .~ userMovement
   step
 
 seqInit :: Seq a -> Seq a
@@ -185,10 +192,11 @@ seqInit = \case
   s :|> _ -> s
   Seq.Empty -> Seq.Empty
 
-extendSnake :: (Monad m) => Point -> GameStep m DeltaBoard
+extendSnake :: (MonadIO m) => Point -> GameStep m DeltaBoard
 extendSnake head' = do
-  SnakeSeq{snakeHead, snakeBody} <- use #snakeSeq
-  #snakeSeq .= SnakeSeq head' (snakeHead <| snakeBody)
+  (_, gameState) <- ask
+  GameState{snakeSeq = SnakeSeq{snakeHead, snakeBody}} <- readIORef gameState
+  modifyIORef gameState $ #snakeSeq .~ SnakeSeq head' (snakeHead <| snakeBody)
   applePosition' <- newApple
   pure
     [ (applePosition', Apple)
@@ -196,10 +204,12 @@ extendSnake head' = do
     , (head', SnakeHead)
     ]
 
-displaceSnake :: (Monad m) => Point -> GameStep m DeltaBoard
+displaceSnake :: (MonadIO m) => Point -> GameStep m DeltaBoard
 displaceSnake head' = do
-  SnakeSeq{snakeHead, snakeBody} <- use #snakeSeq
-  #snakeSeq .= SnakeSeq head' (snakeHead <| seqInit snakeBody)
+  (_, gameState) <- ask
+  GameState{snakeSeq = SnakeSeq{snakeHead, snakeBody}} <- readIORef gameState
+  modifyIORef gameState $
+    #snakeSeq .~ SnakeSeq head' (snakeHead <| seqInit snakeBody)
   pure
     [ (snakeHead, Snake)
     , (head', SnakeHead)

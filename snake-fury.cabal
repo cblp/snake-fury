@@ -41,6 +41,7 @@ library
     , lens
     , mtl
     , random
+    , unliftio
   default-language: GHC2021
 
 executable snake-fury
