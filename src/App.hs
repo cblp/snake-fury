@@ -34,16 +34,16 @@ data Env = Env {boardInfo :: BoardInfo, eventQueue :: EventQueue}
 type App = ReaderT (Env, GameStateRef, RenderStateRef) IO
 
 runApp :: Env -> AppState -> App a -> IO a
-runApp env initialState app = do
+runApp env initial app = do
   gameState <- do
-    applePosition <- newIORef $ runIdentity initialState.gameState.applePosition
-    movement <- newIORef $ runIdentity initialState.gameState.movement
-    snakeSeq <- newIORef $ runIdentity initialState.gameState.snakeSeq
+    applePosition <- newIORef $ runIdentity initial.gameState.applePosition
+    movement <- newIORef $ runIdentity initial.gameState.movement
+    snakeSeq <- newIORef $ runIdentity initial.gameState.snakeSeq
     pure GameState{..}
   renderState <- do
-    board <- newIORef $ runIdentity initialState.renderState.board
-    gameOver <- newIORef $ runIdentity initialState.renderState.gameOver
-    score <- newIORef $ runIdentity initialState.renderState.score
+    board <- newIORef $ runIdentity initial.renderState.board
+    gameOver <- newIORef $ runIdentity initial.renderState.gameOver
+    score <- newIORef $ runIdentity initial.renderState.score
     pure RenderState{..}
   runReaderT app (env, gameState, renderState)
 
