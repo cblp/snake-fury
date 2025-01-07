@@ -1,12 +1,15 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
+
 module Initialization where
 
 import Control.Concurrent (newMVar)
 import Control.Concurrent.BoundedChan (newBoundedChan)
+import Data.Functor.Identity (Identity (Identity))
 import Data.Sequence qualified as Seq
 import EventQueue (EventQueue (EventQueue))
 import GameState qualified as Snake
 import RenderState qualified
-import System.Random (getStdGen, randomRIO)
+import System.Random (randomRIO)
 
 -- | Produces a random point. Use for game initialization, random point generation is done purely within Snake module.
 getRandomPoint :: Int -> Int -> IO RenderState.Point
@@ -24,20 +27,20 @@ inititalizePoints h w = do
 
 -- | given the initial parameters height, width and initial time, It creates the initial state, the initial render state and the event queue
 gameInitialization :: Int -> Int -> Int -> IO (RenderState.BoardInfo, Snake.GameState, RenderState.RenderState, EventQueue)
-gameInitialization hight width initialspeed = do
-  (snakeInit, appleInit) <- inititalizePoints hight width
-  sg <- getStdGen
+gameInitialization height width initialspeed = do
+  (snakeInit, appleInit) <- inititalizePoints height width
   newUserEventQueue <- newBoundedChan 3
   newSpeed <- newMVar initialspeed
-  let binf = RenderState.BoardInfo hight width
+  let binf = RenderState.BoardInfo height width
       gameState =
         Snake.GameState
-          ( Snake.SnakeSeq snakeInit $
-              Seq.fromList [(fst snakeInit, snd snakeInit + 1)]
-          )
-          appleInit
-          Snake.West
-          sg
+          { snakeSeq =
+              Identity $
+                Snake.SnakeSeq snakeInit $
+                  Seq.fromList [(fst snakeInit, snd snakeInit + 1)]
+          , applePosition = Identity appleInit
+          , movement = Identity Snake.West
+          }
       renderState = RenderState.buildInitialBoard binf snakeInit appleInit
       eventQueue = EventQueue newUserEventQueue newSpeed initialspeed
   return (binf, gameState, renderState, eventQueue)

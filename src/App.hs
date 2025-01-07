@@ -1,7 +1,7 @@
 {-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module App where
 
@@ -9,9 +9,10 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (ReaderT, ask, runReaderT, withReaderT)
+import Data.Functor.Identity (runIdentity)
 import EventQueue (EventQueue, readEvent, setSpeed)
 import GHC.Generics (Generic)
-import GameState (Event (..), GameState, move)
+import GameState (Event (..), GameState, GameStateF (..), GameStateRef, move)
 import RenderState (
   BoardInfo,
   RenderMessage,
@@ -28,13 +29,17 @@ data AppState = AppState {gameState :: GameState, renderState :: RenderState}
 data Env = Env {boardInfo :: BoardInfo, eventQueue :: EventQueue}
   deriving (Generic)
 
-type App = ReaderT (Env, IORef GameState, IORef RenderState) IO
+type App = ReaderT (Env, GameStateRef, IORef RenderState) IO
 
 runApp :: Env -> AppState -> App a -> IO a
 runApp env initialState app = do
-  gameStateRef <- newIORef initialState.gameState
+  gameState <- do
+    applePosition <- newIORef $ runIdentity initialState.gameState.applePosition
+    movement <- newIORef $ runIdentity initialState.gameState.movement
+    snakeSeq <- newIORef $ runIdentity initialState.gameState.snakeSeq
+    pure GameState{..}
   renderStateRef <- newIORef initialState.renderState
-  runReaderT app (env, gameStateRef, renderStateRef)
+  runReaderT app (env, gameState, renderStateRef)
 
 -- | Pull an Event from the queue
 pullEvent :: App Event

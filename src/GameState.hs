@@ -15,9 +15,9 @@ module GameState where
 import Control.Monad (when)
 import Control.Monad.Reader (ReaderT, ask)
 import Data.Foldable (toList)
+import Data.Functor.Identity (Identity)
 import Data.Sequence (Seq ((:|>)), (<|))
 import Data.Sequence qualified as Seq
-import Data.Tuple (swap)
 import GHC.Generics (Generic)
 import RenderState (
   BoardInfo (..),
@@ -26,8 +26,8 @@ import RenderState (
   Point,
   RenderMessage (..),
  )
-import System.Random (Random (randomR), StdGen)
-import UnliftIO (IORef, MonadIO, atomicModifyIORef, readIORef, writeIORef)
+import System.Random (randomRIO)
+import UnliftIO (IORef, MonadIO, readIORef, writeIORef)
 
 -- | The are two kind of events, a `ClockEvent`, representing movement which is not force by the user input, and `UserEvent` which is the opposite.
 data Event = Tick | UserEvent Movement
@@ -47,17 +47,18 @@ data SnakeSeq = SnakeSeq {snakeHead :: Point, snakeBody :: Seq Point} deriving (
 {- | The GameState represents all important bits in the game. The Snake, The apple, the current direction of movement and
   a random seed to calculate the next random apple.
 -}
-data GameState' f = GameState
+data GameStateF f = GameState
   { snakeSeq :: f SnakeSeq
   , applePosition :: f Point
   , movement :: f Movement
-  , randomGen :: f StdGen
   }
   deriving (Generic)
 
-type GameState = GameState' IORef
+type GameState = GameStateF Identity
 
-type GameStep = ReaderT (BoardInfo, GameState)
+type GameStateRef = GameStateF IORef
+
+type GameStep = ReaderT (BoardInfo, GameStateRef)
 
 -- | This function should calculate the opposite movement.
 oppositeMovement :: Movement -> Movement
@@ -73,8 +74,8 @@ oppositeMovement = \case
 -}
 makeRandomPoint :: (MonadIO m) => GameStep m Point
 makeRandomPoint = do
-  (BoardInfo{height, width}, GameState{randomGen}) <- ask
-  atomicModifyIORef randomGen $ swap . randomR ((1, 1), (height, width))
+  (BoardInfo{height, width}, _) <- ask
+  randomRIO ((1, 1), (height, width))
 
 {-
 We can't test makeRandomPoint, because different implementation may lead to different valid result.
