@@ -2,13 +2,9 @@
 
 module Main where
 
-import App (AppState (AppState), Env (..), run)
-import Control.Concurrent (
-  forkIO,
- )
-import EventQueue (
-  writeUserInput,
- )
+import App (AppState (AppState), run)
+import Control.Concurrent (forkIO)
+import EventQueue (writeUserInput)
 import Initialization (gameInitialization)
 import System.Environment (getArgs)
 import System.IO (
@@ -37,6 +33,4 @@ main = do
 
   -- Game Loop. We run two different threads, one for the gameloop (main) and one for user inputs.
   _ <- forkIO $ writeUserInput eventQueue
-  let initialState = AppState gameState renderState
-  let initialEnv = Env binf eventQueue
-  run initialEnv initialState
+  run binf eventQueue $ AppState gameState renderState
